@@ -7,66 +7,67 @@ import math
 import numpy as np
 
 
-def plot_token_price(token_addresses: str | list):
+def plot_token_price(token_addresses: str | list, title=None):
     """
     Create price plots for one or more tokens.
-    
+   
     Args:
         token_addresses: Single token address (str) or list of token addresses
+        title: Optional title for the overall figure
     """
     # Convert single token to list for consistent handling
     if isinstance(token_addresses, str):
         token_addresses = [token_addresses]
-    
+   
     num_tokens = len(token_addresses)
     if num_tokens == 0:
         print("No tokens provided")
         return
-    
+   
     # Calculate subplot grid dimensions
     if num_tokens == 1:
         rows, cols = 1, 1
     else:
         cols = min(2, num_tokens)  # Maximum 2 columns
         rows = math.ceil(num_tokens / cols)
-    
+   
     # Create figure with subplots
     fig, axes = plt.subplots(rows, cols, figsize=(12*cols, 6*rows))
-    
+   
     # Convert axes to array if single plot
     if num_tokens == 1:
         axes = np.array([axes])
-    
+   
     # Flatten axes array for easier iteration
     axes_flat = axes.flatten() if num_tokens > 1 else [axes]
-    
+   
     # Plot each token
     for idx, (ax, token_address) in enumerate(zip(axes_flat, token_addresses)):
         # Load the data
         price_data = load_token_price_data(token_address)
-        
+       
         if price_data is None:
-            ax.text(0.5, 0.5, f"No data available for\n{token_address}", 
+            ax.text(0.5, 0.5, f"No data available for\n{token_address}",
                    ha='center', va='center')
             continue
-        
+       
         # Get statistics
         stats = get_token_stats(price_data)
-        
+       
         # Plot price data
         ax.plot(price_data.index, price_data['price'], linewidth=2)
-        
+       
         # Add labels and title
         ax.set_title(f'Token Price Over Time\n{token_address}')
         ax.set_xlabel('Time')
         ax.set_ylabel('Price (SOL)')
-        
+       
         # Add grid
         ax.grid(True, linestyle='--', alpha=0.7)
-        
+       
         # Rotate x-axis labels
         ax.tick_params(axis='x', rotation=45)
-        
+       
         # Add stats annotation
         stats_text = (
             f"Initial Price: {stats['initial_price']:.8f}\n"
@@ -76,14 +77,18 @@ def plot_token_price(token_addresses: str | list):
         ax.annotate(stats_text, xy=(0.02, 0.98), xycoords='axes fraction',
                    bbox=dict(facecolor='white', alpha=0.8),
                    verticalalignment='top')
-    
+   
     # Hide empty subplots if any
     for idx in range(len(token_addresses), len(axes_flat)):
         axes_flat[idx].axis('off')
-    
+   
+    # Add main title to the figure if provided
+    if title:
+        fig.suptitle(title, fontsize=16, y=1.02)
+   
     # Adjust layout
     plt.tight_layout()
-    
+   
     # Show plot
     plt.show()
 
