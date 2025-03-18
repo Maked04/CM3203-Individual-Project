@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from src.data.loader import load_feature_vector_data
+from src.data_processing.loader import load_feature_vector_data
 
 def analyze_token_clusters(n_clusters=3):
     # Read data

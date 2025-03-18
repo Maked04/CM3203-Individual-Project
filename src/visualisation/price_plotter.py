@@ -1,7 +1,7 @@
 import sys
 import os
-from src.data.loader import load_token_price_data, get_token_stats, list_available_tokens
-from src.data.processor import trim_main_trading_period
+from src.data_processing.loader import load_token_price_data, get_token_stats, list_available_tokens
+from src.data_processing.processor import trim_main_trading_period
 import matplotlib.pyplot as plt
 import random
 import math

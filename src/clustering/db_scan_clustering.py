@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import DBSCAN
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from src.data.loader import load_feature_vector_data
+from src.data_processing.loader import load_feature_vector_data
 from sklearn.neighbors import NearestNeighbors
 
 def analyze_token_clusters(eps=0.5, min_samples=5):

@@ -2,7 +2,7 @@
 import pandas as pd
 import os
 from datetime import datetime
-from src.data.processor import remove_price_anomalies
+from src.data_processing.processor import remove_price_anomalies
 
 def get_data_dir():
     """Get the absolute path to the data directory."""
