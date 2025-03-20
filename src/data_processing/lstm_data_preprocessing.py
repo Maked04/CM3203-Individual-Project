@@ -74,17 +74,65 @@ def get_token_features(token_address):
     return np.array(feature_matrix)
 
 
-def get_sliding_windows(feature_matrix, sequence_length=10):
-    # sequence_length: Number of past transactions used as input
+def get_token_features_basic(token_address):
+    # Load and clean data
+    df = load_token_data(token_address)
+    cleaned_df = remove_price_anomalies(df)
+
+    # Compute price changes
+    price_changes = cleaned_df["token_price"].pct_change().iloc[1:].values  # Convert to array
+
+    # Get start time
+    start_time = cleaned_df.iloc[0]["slot"]
+
+    # Feature matrix
+    feature_matrix = []
+
+    for i, (_, row) in enumerate(cleaned_df.iloc[1:].iterrows()):  # Ensure sequential iteration
+        price_change = price_changes[i]  # Use proper indexing from numpy array
+        if not np.isnan(price_change):  # Ignore NaN values
+            feature_matrix.append([
+                row["slot"] - start_time,  # Time difference
+                price_change
+            ])
+
+    return np.array(feature_matrix)
+
+
+def get_sliding_windows(feature_matrix, sequence_length=10, prediction_horizon=1):
+    """
+    Creates sliding windows from feature matrix for time series prediction.
+    
+    Args:
+        feature_matrix: Matrix containing features (last column is price_change from pct_change())
+        sequence_length: Number of past transactions used as input
+        prediction_horizon: Number of future transactions to calculate cumulative price change
+        
+    Returns:
+        X: Input sequences of shape (num_samples, sequence_length, num_features)
+        y: Cumulative price changes over the prediction horizon of shape (num_samples,)
+    """
     X, y = [], []
-
-    for i in range(len(feature_matrix) - sequence_length):
-        X.append(feature_matrix[i : i + sequence_length])  # Last 10 transactions as input
-        y.append(feature_matrix[i + sequence_length, 3])  # Predict next price_change
-
-    X = np.array(X)  # Shape: (num_samples, 10, 4)
+    
+    # Make sure we have enough data for both the sequence and the future prediction
+    for i in range(len(feature_matrix) - sequence_length - prediction_horizon + 1):
+        # Input sequence: last sequence_length transactions
+        X.append(feature_matrix[i : i + sequence_length])
+        
+        # Target: cumulative price change over the prediction_horizon transactions
+        # We collect all price changes in the horizon window
+        future_changes = feature_matrix[i + sequence_length : i + sequence_length + prediction_horizon, -1]
+        print(f"Using these changes: {future_changes}")
+        
+        # Calculate cumulative price change (proper way to combine percentage changes)
+        # (1 + r1) * (1 + r2) * ... * (1 + rn) - 1
+        cumulative_change = np.prod(1 + future_changes) - 1
+        
+        y.append(cumulative_change)
+        
+    X = np.array(X)  # Shape: (num_samples, sequence_length, num_features)
     y = np.array(y)  # Shape: (num_samples,)
-
+    
     return X, y
 
 def save_data(token_addresses, output_folder="../../data/"):
@@ -107,4 +155,4 @@ if __name__ == "__main__":
 
     feature_matrix = get_token_features(token_address)
 
-    X, y = get_sliding_windows(feature_matrix)    
+    X, y = get_sliding_windows(feature_matrix, sequence_length=10, prediction_horizon=1) 
