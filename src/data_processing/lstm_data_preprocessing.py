@@ -5,38 +5,6 @@ import numpy as np
 import math
 
 
-# Given list of transactions
-
-# [tx1 tx2 tx3 tx4 tx5 tx6 tx7 tx8 tx9 tx10 tx11 tx12 tx13 tx14 tx15]
-
-# Input is [10 x 4] array
-
-# Input 
-# tx2: price change from tx1 to tx2
-#      time
-#      liquidity ratio
-#      trade size ratio
-
-# tx3: price change from tx2 to tx3
-#      time
-#      liquidity ratio
-#      trade size ratio
-
-
-# .....
-
-#tx11: price change from tx10 to tx11
-#      time
-#      liquidity ratio
-#      trade size ratio
-
-# Target 
-# Price change from tx11 to tx12
-
-
-def get_token_price_changes(token_data):
-    return token_data["token_price"].pct_change()
-
 def get_trade_size_ratio(row):
     if row["bc_spl_after"] > row["bc_spl_before"]:  # Sell
         return abs(row["bc_spl_after"] - row["bc_spl_before"]) / row["bc_spl_after"]
@@ -55,23 +23,24 @@ def get_token_features(token_address):
     # Compute price changes
     price_changes = cleaned_df["token_price"].pct_change().iloc[1:].values  # Convert to array
 
-    # Get start time
-    start_time = cleaned_df.iloc[0]["slot"]
-
     # Feature matrix
     feature_matrix = []
-
+    
+    # Iterate over the dataframe rows
+    previous_time = cleaned_df.iloc[0]["slot"]  # Initialize previous time with the first transaction's time
     for i, (_, row) in enumerate(cleaned_df.iloc[1:].iterrows()):  # Ensure sequential iteration
         price_change = price_changes[i]  # Use proper indexing from numpy array
         if not np.isnan(price_change):  # Ignore NaN values
             feature_matrix.append([
                 get_trade_size_ratio(row),
                 get_trade_liquidity_ratio(row),
-                row["slot"] - start_time,  # Time difference
+                row["slot"] - previous_time,  # Time difference relative to previous transaction
                 price_change
             ])
+            previous_time = row["slot"]  # Update previous time to the current transaction's time
 
     return np.array(feature_matrix)
+
 
 
 def get_token_features_basic(token_address):
@@ -127,6 +96,12 @@ def get_sliding_windows(feature_matrix, sequence_length=10, prediction_horizon=1
         # Calculate cumulative price change (proper way to combine percentage changes)
         # (1 + r1) * (1 + r2) * ... * (1 + rn) - 1
         cumulative_change = np.prod(1 + future_changes) - 1
+        print("We get cumulative change of: ", cumulative_change)
+
+        print("vs adding way")
+        print("We get cumulative change of: ", sum(future_changes))
+
+        #exit()
         
         y.append(cumulative_change)
         
@@ -155,4 +130,4 @@ if __name__ == "__main__":
 
     feature_matrix = get_token_features(token_address)
 
-    X, y = get_sliding_windows(feature_matrix, sequence_length=10, prediction_horizon=1) 
+    X, y = get_sliding_windows(feature_matrix, sequence_length=10, prediction_horizon=2) 
