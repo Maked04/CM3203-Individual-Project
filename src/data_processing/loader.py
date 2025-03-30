@@ -18,6 +18,11 @@ def get_data_dir():
     
     return data_dir
 
+def load_data_file(file_name):
+    file_path = os.path.join(get_data_dir(), file_name)
+    return open(file_path)
+
+
 def load_feature_vector_data(file_name: str = "Jan_25_Token_Features.csv") -> pd.DataFrame:
     """Load feature vector data from the data directory."""
     file_path = os.path.join(get_data_dir(), file_name)
