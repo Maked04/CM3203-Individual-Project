@@ -28,6 +28,48 @@ def get_trade_liquidity_ratio(row):
     ratio = row["bc_sol_before"] / row["bc_spl_before"]
     return None if not np.isfinite(ratio) else ratio
 
+def get_token_features_basic(token_address, relative_time=True, min_sol_size=0.1):
+    """Generate feature matrix for token transactions."""
+    # Load and clean data
+    df = load_token_data(token_address)
+    cleaned_df = remove_price_anomalies(df)
+    
+    # Compute price changes
+    price_changes = cleaned_df["token_price"].pct_change().iloc[1:].values  # Convert to array
+    
+    # Feature matrix
+    feature_matrix = []
+    
+    # Iterate over the dataframe rows
+    previous_time = cleaned_df.iloc[0]["slot"]  # Initialize previous time with the first transaction's time
+    for i, (_, row) in enumerate(cleaned_df.iloc[1:].iterrows()):  # Ensure sequential iteration
+        # Skip small transactions
+        if row["bc_sol_before"] - row["bc_sol_after"] < min_sol_size:
+            continue
+            
+        # Get price change
+        price_change = price_changes[i]  # Use proper indexing from numpy array
+        
+        # Calculate time difference
+        time = row["slot"] - previous_time
+        
+        
+        # Check for valid values (not None, not NaN, and finite)
+        if (price_change is not None and not np.isnan(price_change) and np.isfinite(price_change) and np.isfinite(time)):
+            
+            feature_matrix.append([
+                row.name,
+                row["token_price"],
+                time,
+                price_change
+            ])
+            
+            if relative_time:
+                previous_time = row["slot"]  # Update previous time for relative time calculation
+    
+    return np.array(feature_matrix)
+
+
 def get_token_features(token_address, relative_time=True, min_sol_size=0.1):
     """Generate feature matrix for token transactions."""
     # Load and clean data
