@@ -1,11 +1,8 @@
-from src.data_processing.loader import load_token_data
+from src.data_processing.loader import load_token_data, get_metric_by_tx_sig
 from src.data_processing.processor import remove_price_anomalies
 import pandas as pd
 import numpy as np
-import math
 
-
-import numpy as np
 
 def get_trade_size_ratio(row):
     """Calculate the ratio of trade size to balance after/before trade."""
@@ -110,6 +107,72 @@ def get_token_features(token_address, relative_time=True, min_sol_size=0.1):
                 row["token_price"],
                 trade_size_ratio,
                 liquidity_ratio,
+                time,
+                price_change
+            ])
+            
+            if relative_time:
+                previous_time = row["slot"]  # Update previous time for relative time calculation
+    
+    return np.array(feature_matrix)
+
+def get_token_features_extras(token_address, relative_time=True, min_sol_size=0.1):
+    """Generate feature matrix for token transactions."""
+    # Load and clean data
+    df = load_token_data(token_address)
+    cleaned_df = remove_price_anomalies(df)
+    
+    # Compute price changes
+    price_changes = cleaned_df["token_price"].pct_change().iloc[1:].values  # Convert to array
+    
+    # Feature matrix
+    feature_matrix = []
+    
+    # Iterate over the dataframe rows
+    previous_time = cleaned_df.iloc[0]["slot"]  # Initialize previous time with the first transaction's time
+    for i, (_, row) in enumerate(cleaned_df.iloc[1:].iterrows()):  # Ensure sequential iteration
+        # Skip small transactions
+        if row["bc_sol_before"] - row["bc_sol_after"] < min_sol_size:
+            continue
+            
+        # Get price change
+        price_change = price_changes[i]  # Use proper indexing from numpy array
+        
+        # Calculate time difference
+        time = row["slot"] - previous_time
+        
+        # Get feature values
+        trade_size_ratio = get_trade_size_ratio(row)
+        liquidity_ratio = get_trade_liquidity_ratio(row)
+
+        # Get wallet metrics
+        wallet_metrics = get_metric_by_tx_sig(row["tx_sig"])
+        wallet_trade_size_deviation = wallet_metrics["trade_size_deviation"]
+        volume_prior = wallet_metrics["volume_prior"]
+        trade_count_prior = wallet_metrics["trade_count_prior"]
+        rough_pnl = wallet_metrics["rough_pnl"]
+        average_roi = wallet_metrics["average_roi"]
+        win_rate = wallet_metrics["win_rate"]
+        average_hold_duration = wallet_metrics["average_hold_duration"]
+        
+        # Check for valid values (not None, not NaN, and finite)
+        if (price_change is not None and not np.isnan(price_change) and np.isfinite(price_change) and 
+            trade_size_ratio is not None and np.isfinite(trade_size_ratio) and 
+            liquidity_ratio is not None and np.isfinite(liquidity_ratio) and
+            np.isfinite(time)):
+            
+            feature_matrix.append([
+                row.name,
+                row["token_price"],
+                trade_size_ratio,
+                liquidity_ratio,
+                wallet_trade_size_deviation,
+                volume_prior,
+                trade_count_prior,
+                rough_pnl,
+                average_roi,
+                win_rate,
+                average_hold_duration,
                 time,
                 price_change
             ])
@@ -289,7 +352,4 @@ if __name__ == "__main__":
     token_address = "WUb891xiehvvaDURF1r5ZBcbKULPQHcSnNtLfywpump"
     feature_matrix = get_token_features(token_address, relative_time=False)
 
-    print(len(feature_matrix))
-
-    #X, y = get_sliding_windows(feature_matrix, sequence_length=10, prediction_horizon=40, time_horizon=True) 
-    X, y = get_time_buckets(feature_matrix, min_txs_per_second=1)
+    print(feature_matrix)

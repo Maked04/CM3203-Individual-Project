@@ -1,8 +1,10 @@
 # Utilities for loading the data
 import pandas as pd
+import numpy as np
 import os
-from datetime import datetime
+import json
 from src.data_processing.processor import remove_price_anomalies
+import sqlite3
 
 def get_data_dir():
     """Get the absolute path to the data directory."""
@@ -21,6 +23,20 @@ def get_data_dir():
 def load_data_file(file_name):
     file_path = os.path.join(get_data_dir(), file_name)
     return open(file_path)
+
+
+def get_metric_by_tx_sig(tx_sig):
+    db_path = os.path.join(get_data_dir(), "wallet_metrics.db")
+    if not os.path.exists(db_path):
+        db_path =  "D:/wallet_metrics.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row  # Makes rows accessible like dicts
+        cursor = conn.cursor()
+        row = cursor.execute(
+            "SELECT * FROM metrics WHERE tx_sig = ?", (tx_sig,)
+        ).fetchone()
+    
+    return dict(row) if row else None
 
 
 def load_feature_vector_data(file_name: str = "Jan_25_Token_Features.csv") -> pd.DataFrame:
@@ -171,3 +187,24 @@ def get_token_stats(price_data: pd.DataFrame) -> dict:
         'trading_days': (price_data.index[-1] - price_data.index[0]).days,
         'transaction_count': len(price_data)
     }
+
+def load_time_bucket_data(folder_name="time_bucket_1"):
+    folder_path = os.path.join(get_data_dir(), "time_bucket_data", folder_name)
+    
+    with open(os.path.join(folder_path, "config.json")) as f:
+        config = json.load(f)
+
+    token_time_buckets = {}
+    for token in os.listdir(folder_path):
+        token_path = os.path.join(folder_path, token)
+        if token == "config.json" or not os.path.isdir(token_path):
+            continue
+
+        X = np.load(os.path.join(token_path, "X.npy"))
+        y = np.load(os.path.join(token_path, "y.npy"))
+        bucket_times = np.load(os.path.join(token_path, "bucket_times.npy"))
+
+        token_time_buckets[token] = {"X": X, "y": y, "bucket_times": bucket_times}
+
+    return token_time_buckets, config
+ 
