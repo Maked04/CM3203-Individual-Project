@@ -1,8 +1,72 @@
-from src.data_processing.loader import load_token_data, get_metric_by_tx_sig
+from src.data_processing.loader import load_token_data, get_metric_by_tx_sig, get_data_dir, load_data_file
 from src.data_processing.processor import remove_price_anomalies
-import pandas as pd
 import numpy as np
+import datetime
+import os
+import json
 
+class FeaturesConfig:
+    def __init__(
+        self,
+        trade_size_ratio=False,
+        liquidity_ratio=False,
+        relative_time=False,
+        absolute_time=False,
+        price_change=False,
+        wallet_trade_size_deviation=False,
+        volume_prior=False,
+        trade_count_prior=False,
+        rough_pnl=False,
+        average_roi=False,
+        win_rate=False,
+        average_hold_duration=False
+    ):
+        # Standard features
+        self.trade_size_ratio = trade_size_ratio
+        self.liquidity_ratio = liquidity_ratio
+        self.relative_time = relative_time
+        self.absolute_time = absolute_time
+        self.price_change = price_change
+        # Wallet specific features
+        self.wallet_trade_size_deviation = wallet_trade_size_deviation
+        self.volume_prior = volume_prior
+        self.trade_count_prior = trade_count_prior
+        self.rough_pnl = rough_pnl
+        self.average_roi = average_roi
+        self.win_rate = win_rate
+        self.average_hold_duration = average_hold_duration
+
+
+class TimeBucketConfig:
+    def __init__(
+        self,
+        bucket_size=30,
+        prediction_horizon=1,
+        min_txs_per_second=1,
+        use_max_multiple=True,
+        use_cumulative_price_change=False,
+        step_size=1,  # How many seconds to advance when creating the next bucket
+        max_seq_length=300
+    ):
+        # Bucket configuration
+        self.bucket_size = bucket_size
+        self.prediction_horizon = prediction_horizon
+        self.min_txs_per_second = min_txs_per_second
+        
+        # Target variable configuration
+        self.use_max_multiple = use_max_multiple
+        self.use_cumulative_price_change = use_cumulative_price_change
+        
+        # Step size for sliding window (defaults to 1 second)
+        self.step_size = step_size
+
+        # Max sequence length per time buclet
+        self.max_seq_length = max_seq_length
+        
+        # Validate configuration
+        if self.use_max_multiple and self.use_cumulative_price_change:
+            raise ValueError("Cannot use both max_multiple and cumulative_price_change for target calculation")
+        
 
 def get_trade_size_ratio(row):
     """Calculate the ratio of trade size to balance after/before trade."""
@@ -25,224 +89,143 @@ def get_trade_liquidity_ratio(row):
     ratio = row["bc_sol_before"] / row["bc_spl_before"]
     return None if not np.isfinite(ratio) else ratio
 
-def get_token_features_basic(token_address, relative_time=True, min_sol_size=0.1):
-    """Generate feature matrix for token transactions."""
-    # Load and clean data
+def validate_features(features):
+    for feature in features:
+        if feature is None:
+            return False
+        if not isinstance(feature, (int, float, np.number)):
+            return False
+        if not np.isfinite(feature):  # This includes both inf and nan
+            return False
+    return True
+
+
+def get_token_features_and_metadata(token_address, min_sol_size=0.1):
+    """
+    Extract features from token data along with metadata needed for target creation.
+    
+    Returns:
+        feature_matrix: Matrix containing only the features
+        timestamps: Array of timestamps for each row
+        prices: Array of token prices for each row
+    """
     df = load_token_data(token_address)
     cleaned_df = remove_price_anomalies(df)
-    
+
     # Compute price changes
     price_changes = cleaned_df["token_price"].pct_change().iloc[1:].values  # Convert to array
     
-    # Feature matrix
-    feature_matrix = []
-    
-    # Iterate over the dataframe rows
+    start_time = cleaned_df.iloc[0]["slot"]  # Initialize start time with the first transaction's time
     previous_time = cleaned_df.iloc[0]["slot"]  # Initialize previous time with the first transaction's time
-    for i, (_, row) in enumerate(cleaned_df.iloc[1:].iterrows()):  # Ensure sequential iteration
-        # Skip small transactions
-        if row["bc_sol_before"] - row["bc_sol_after"] < min_sol_size:
-            continue
-            
-        # Get price change
-        price_change = price_changes[i]  # Use proper indexing from numpy array
-        
-        # Calculate time difference
-        time = row["slot"] - previous_time
-        
-        
-        # Check for valid values (not None, not NaN, and finite)
-        if (price_change is not None and not np.isnan(price_change) and np.isfinite(price_change) and np.isfinite(time)):
-            
-            feature_matrix.append([
-                row.name,
-                row["token_price"],
-                time,
-                price_change
-            ])
-            
-            if relative_time:
-                previous_time = row["slot"]  # Update previous time for relative time calculation
-    
-    return np.array(feature_matrix)
 
-
-def get_token_features(token_address, relative_time=True, min_sol_size=0.1):
-    """Generate feature matrix for token transactions."""
-    # Load and clean data
-    df = load_token_data(token_address)
-    cleaned_df = remove_price_anomalies(df)
-    
-    # Compute price changes
-    price_changes = cleaned_df["token_price"].pct_change().iloc[1:].values  # Convert to array
-    
     # Feature matrix
-    feature_matrix = []
-    
-    # Iterate over the dataframe rows
-    previous_time = cleaned_df.iloc[0]["slot"]  # Initialize previous time with the first transaction's time
-    for i, (_, row) in enumerate(cleaned_df.iloc[1:].iterrows()):  # Ensure sequential iteration
-        # Skip small transactions
-        if row["bc_sol_before"] - row["bc_sol_after"] < min_sol_size:
+    all_features = []
+    timestamps = []
+    prices = []
+    for i, (_, row) in enumerate(cleaned_df.iloc[1:].iterrows()): 
+        if abs(row["bc_sol_before"] - row["bc_sol_after"]) < min_sol_size:
             continue
-            
-        # Get price change
-        price_change = price_changes[i]  # Use proper indexing from numpy array
-        
-        # Calculate time difference
-        time = row["slot"] - previous_time
-        
-        # Get feature values
-        trade_size_ratio = get_trade_size_ratio(row)
-        liquidity_ratio = get_trade_liquidity_ratio(row)
-        
-        # Check for valid values (not None, not NaN, and finite)
-        if (price_change is not None and not np.isnan(price_change) and np.isfinite(price_change) and 
-            trade_size_ratio is not None and np.isfinite(trade_size_ratio) and 
-            liquidity_ratio is not None and np.isfinite(liquidity_ratio) and
-            np.isfinite(time)):
-            
-            feature_matrix.append([
-                row.name,
-                row["token_price"],
-                trade_size_ratio,
-                liquidity_ratio,
-                time,
-                price_change
-            ])
-            
-            if relative_time:
-                previous_time = row["slot"]  # Update previous time for relative time calculation
-    
-    return np.array(feature_matrix)
 
-def get_token_features_extras(token_address, relative_time=True, min_sol_size=0.1):
-    """Generate feature matrix for token transactions."""
-    # Load and clean data
-    df = load_token_data(token_address)
-    cleaned_df = remove_price_anomalies(df)
-    
-    # Compute price changes
-    price_changes = cleaned_df["token_price"].pct_change().iloc[1:].values  # Convert to array
-    
-    # Feature matrix
-    feature_matrix = []
-    
-    # Iterate over the dataframe rows
-    previous_time = cleaned_df.iloc[0]["slot"]  # Initialize previous time with the first transaction's time
-    for i, (_, row) in enumerate(cleaned_df.iloc[1:].iterrows()):  # Ensure sequential iteration
-        # Skip small transactions
-        if row["bc_sol_before"] - row["bc_sol_after"] < min_sol_size:
-            continue
-            
-        # Get price change
-        price_change = price_changes[i]  # Use proper indexing from numpy array
-        
-        # Calculate time difference
-        time = row["slot"] - previous_time
-        
-        # Get feature values
-        trade_size_ratio = get_trade_size_ratio(row)
-        liquidity_ratio = get_trade_liquidity_ratio(row)
-
-        # Get wallet metrics
         wallet_metrics = get_metric_by_tx_sig(row["tx_sig"])
-        wallet_trade_size_deviation = wallet_metrics["trade_size_deviation"]
-        volume_prior = wallet_metrics["volume_prior"]
-        trade_count_prior = wallet_metrics["trade_count_prior"]
-        rough_pnl = wallet_metrics["rough_pnl"]
-        average_roi = wallet_metrics["average_roi"]
-        win_rate = wallet_metrics["win_rate"]
-        average_hold_duration = wallet_metrics["average_hold_duration"]
+        if wallet_metrics is None:
+            #continue
+            wallet_metrics = {"trade_size_deviation": 1,
+                              "volume_prior": 1,
+                              "trade_count_prior": 1,
+                              "rough_pnl": 1,
+                              "average_roi": 1,
+                              "win_rate": 1,
+                              "average_hold_duration": 1}
+
+        relative_time = row["slot"] - previous_time
+        absolute_time = row["slot"] - start_time
+
+        previous_time = row["slot"]  # Update previous time for relative time calculation
+
+        # IMPORTANT, order of features must match the order of variables in features config
+        features = [get_trade_size_ratio(row),
+                    get_trade_liquidity_ratio(row),
+                    relative_time,
+                    absolute_time,
+                    price_changes[i],
+                    wallet_metrics["trade_size_deviation"],
+                    wallet_metrics["volume_prior"],
+                    wallet_metrics["trade_count_prior"],
+                    wallet_metrics["rough_pnl"],
+                    wallet_metrics["average_roi"],
+                    wallet_metrics["win_rate"],
+                    wallet_metrics["average_hold_duration"],
+                    ]
         
-        # Check for valid values (not None, not NaN, and finite)
-        if (price_change is not None and not np.isnan(price_change) and np.isfinite(price_change) and 
-            trade_size_ratio is not None and np.isfinite(trade_size_ratio) and 
-            liquidity_ratio is not None and np.isfinite(liquidity_ratio) and
-            np.isfinite(time)):
-            
-            feature_matrix.append([
-                row.name,
-                row["token_price"],
-                trade_size_ratio,
-                liquidity_ratio,
-                wallet_trade_size_deviation,
-                volume_prior,
-                trade_count_prior,
-                rough_pnl,
-                average_roi,
-                win_rate,
-                average_hold_duration,
-                time,
-                price_change
-            ])
-            
-            if relative_time:
-                previous_time = row["slot"]  # Update previous time for relative time calculation
-    
-    return np.array(feature_matrix)
+        if validate_features(features):
+            all_features.append(features)
+
+            # Store metadata for target calculation separately
+            timestamps.append(row.name)
+            prices.append(row["token_price"])
+
+    # Return separate arrays for features and metadata
+    return np.array(all_features), np.array(timestamps), np.array(prices)
 
 
-def get_time_buckets(feature_matrix, bucket_size=30, prediction_horizon=1, min_txs_per_second=1, max_multiple=True, cumulative_price_change=False):
+def get_time_buckets(feature_matrix, timestamps, prices, config: TimeBucketConfig):
     """
     Creates sliding windows of time buckets from feature matrix for time series prediction.
    
     Args:
-        feature_matrix: Matrix containing features (last column is price_change from pct_change())
-        bucket_size: Number of seconds per time bucket
-        prediction_horizon: Number of buckets to use for prediction
-        min_txs_per_second: Minimum number of txs per second a bucket can have
-        max_multiple: Whether to use max multiple in prediction horizon for the target value
-        cumulative_price_change: Whether to use cumulative price change across prediction horizon for the target value
+        feature_matrix: Matrix containing only the features
+        timestamps: Array of timestamps for each feature row
+        prices: Array of token prices for each feature row
+        config: TimeBucketConfig object with settings for bucket creation and target calculation
        
     Returns:
         X: Input sequences as standard list as they may have different lengths so cant be numpy array
-        y: Max multiples or cumulative price change in prediction horizon as numpy array
+        y: Target values calculated according to the configuration
         bucket_times: List of tuples containing (start_time, end_time) for each bucket
     """
     X, y = [], []
     bucket_times = []  # List to store start and end times of each bucket
     
-    feature_times = feature_matrix[:, 0]  # Assuming block_time is the first column
-    feature_prices = feature_matrix[:, 1]  # Assuming token_price is the second column
-    feature_matrix = feature_matrix[:, 2:]  # Remove the time and token price columns (Only used for target calculation)
+    min_time = np.min(timestamps)
+    max_time = np.max(timestamps)
     
-    min_time = np.min(feature_times)
-    max_time = np.max(feature_times)
-    
-    for start_time in np.arange(min_time, max_time, 1):
-        end_time = start_time + bucket_size
-        # Get indicies of times falling in range
-        bucket_indexes = np.where((feature_times >= start_time) & (feature_times < end_time))[0]
+    for start_time in np.arange(min_time, max_time, config.step_size):
+        end_time = start_time + config.bucket_size
+        
+        # Get indices of times falling in range
+        bucket_indexes = np.where((timestamps >= start_time) & (timestamps < end_time))[0]
         bucket_features = feature_matrix[bucket_indexes]
         
-        if len(bucket_features) / bucket_size < min_txs_per_second:
+        if len(bucket_features) / config.bucket_size < config.min_txs_per_second:
             continue
             
         # Get target variable
         target_variable = None
-        horizon_indexes = np.where((feature_times >= end_time) & (feature_times < (end_time + (bucket_size * prediction_horizon))))[0]
+        horizon_end_time = end_time + (config.bucket_size * config.prediction_horizon)
+        horizon_indexes = np.where((timestamps >= end_time) & (timestamps < horizon_end_time))[0]
         
-        if max_multiple:
+        if config.use_max_multiple:
             if len(bucket_indexes) == 0:
                 continue
-            price_at_end = feature_prices[bucket_indexes[-1]] # Price at end of bucket
-            horizon_prices = feature_prices[horizon_indexes]
+            price_at_end = prices[bucket_indexes[-1]]  # Price at end of bucket
+            horizon_prices = prices[horizon_indexes]
             if horizon_prices.size > 0:
                 max_upside = max(horizon_prices) / price_at_end - 1
                 max_downside = min(horizon_prices) / price_at_end - 1
-                target_variable = max_upside if abs(max_upside) > abs(max_downside) else max_downside   # Max move
-        elif cumulative_price_change:
-            horizon_price_chnages = feature_matrix[horizon_indexes, -1]
-            target_variable = np.prod(1 + horizon_price_chnages) - 1  # Cumulative change
+                target_variable = max_upside if abs(max_upside) > abs(max_downside) else max_downside  # Max move
+        elif config.use_cumulative_price_change:
+            price_changes = np.diff(prices[horizon_indexes]) / prices[horizon_indexes[:-1]] if len(horizon_indexes) > 1 else np.array([])
+            target_variable = np.prod(1 + price_changes) - 1 if len(price_changes) > 0 else None  # Cumulative change
        
         if target_variable is not None and not np.isnan(target_variable) and not np.isinf(target_variable):
             X.append(bucket_features)
             y.append(target_variable)
             bucket_times.append((start_time, end_time))  # Store the start and end time of this bucket
     
+    X = pad_sequences_with_price_importance(X, config.max_seq_length)
     y = np.array(y)
     return X, y, bucket_times
+
 
 def pad_sequences_with_price_importance(X_list, max_seq_length=300):
     """
@@ -292,64 +275,88 @@ def pad_sequences_with_price_importance(X_list, max_seq_length=300):
             X_padded[i, start_idx:, :] = important_transactions
    
     return X_padded
-        
 
-def get_sliding_windows(feature_matrix, sequence_length=10, prediction_horizon=1, time_horizon=False):
-    """
-    Creates sliding windows from feature matrix for time series prediction.
+def reduce_time_bucket_features(X: np.ndarray, config: FeaturesConfig) -> np.ndarray:
+    # Assuming config.__dict__ contains a dictionary with the feature mask as boolean values
+    features_mask = list(config.__dict__.values())
     
-    Args:
-        feature_matrix: Matrix containing features (last column is price_change from pct_change())
-        sequence_length: Number of past transactions used as input
-        prediction_horizon: Number of future transactions or seconds of transactions to calculate cumulative price change
-        time_horizon: Whether to use number number of seconds for prediction horizon, false uses number of txs
-        
-    Returns:
-        X: Input sequences of shape (num_samples, sequence_length, num_features)
-        y: Cumulative price changes over the prediction horizon of shape (num_samples,)
-    """
-    X, y = [], []
-
-    feature_times = feature_matrix[:, 0]  # Assuming block_time is the first column
-    feature_matrix = feature_matrix[:, 2:]  # Remove the time and token price column    
+    # Filter the features based on the mask
+    filtered = X[:, :, features_mask]
     
-    # Make sure we have enough data for both the sequence and the future prediction
-    for i in range(len(feature_matrix) - sequence_length - prediction_horizon + 1):
-        # Input sequence: last sequence_length transactions
-        X.append(feature_matrix[i : i + sequence_length])
-        
-        # Target: cumulative price change over the prediction_horizon transactions
-        # We collect all price changes in the horizon window
-        if time_horizon:
-            pred_start_time = feature_times[i + sequence_length]
-            pred_end_time = pred_start_time + prediction_horizon
-            horizon_indexes = np.where((feature_times >= pred_start_time) & (feature_times <= pred_end_time))[0]
-            filtered_indexes = horizon_indexes[horizon_indexes > i + sequence_length] # Remove indexes that are in input sequence
-            future_changes = feature_matrix[filtered_indexes, -1]
-            
-        else:
-            future_changes = feature_matrix[i + sequence_length : i + sequence_length + prediction_horizon, -1]
-        
-        # Calculate cumulative price change (proper way to combine percentage changes)
-        # (1 + r1) * (1 + r2) * ... * (1 + rn) - 1
-        cumulative_change = np.prod(1 + future_changes) - 1
+    return filtered
 
-        # Add to training data only if the result is valid
-        if not np.isnan(cumulative_change) and not np.isinf(cumulative_change):
-            y.append(cumulative_change)
-            # Keep the corresponding X entry (we already added it above)
-        else:
-            # Remove the X entry if y is invalid
-            X.pop()
-                
-    X = np.array(X)  # Shape: (num_samples, sequence_length, num_features)
-    y = np.array(y)  # Shape: (num_samples,)
-    
-    return X, y
+def pre_process_train_test_data(time_bucket_config, tokens_file="cluster_2_tokens.txt"):
+    # Create train test data folder if it doesnt exist
+    base_dir = os.path.join(get_data_dir(), "time_bucket_data")
+    os.makedirs(base_dir, exist_ok=True)
 
+    # Name of new directory is time_bucket_num where num increases per folder
+    folder_name = f"time_bucket_{len(os.listdir(base_dir)) + 1}"
+    time_bucket_dir = os.path.join(base_dir, folder_name)
+    os.makedirs(time_bucket_dir, exist_ok=True)
+
+    config_json = vars(time_bucket_config)
+
+    # Save time bucket config
+    with open(os.path.join(time_bucket_dir, "config.json"), "w") as f:
+        json.dump(config_json, f, indent=4)
+
+    # Read cluster 2 tokens
+    with load_data_file(tokens_file) as f:
+        token_addresses = f.read().splitlines()[:-1]
+
+    # Get features
+    for token_address in token_addresses:
+        features, timestamps, prices = get_token_features_and_metadata(token_address)
+
+        # Get time buckets
+        X, y, bucket_times = get_time_buckets(features, timestamps, prices, time_bucket_config) 
+        if len(X) == 0 or len(y) == 0 or len(X) != len(y):  # Make sure we have data
+            continue
+        
+        token_dir = os.path.join(time_bucket_dir, token_address)
+        os.makedirs(token_dir, exist_ok=True)
+        # Save X, y, bucket_times per token
+        np.save(os.path.join(token_dir, "X"), X)
+        np.save(os.path.join(token_dir, "y"), y)
+        np.save(os.path.join(token_dir, "bucket_times"), bucket_times)
+
+
+def test_saving():
+    time_bucket_config = TimeBucketConfig(
+    bucket_size=30,  
+    prediction_horizon=1,
+    min_txs_per_second=1,
+    use_max_multiple=True,
+    step_size=1,
+    max_seq_length=300
+    )
+
+    pre_process_train_test_data(time_bucket_config)
+
+
+def test_reducing_features():
+    token_address = "BjHTDNRjKxEhQkxtjo6iTNPdnpcwXFNdnd6SNhWopump"
+    min_sol_size = 0.1
+    features, timestamps, prices = get_token_features_and_metadata(token_address, min_sol_size=min_sol_size)
+    time_bucket_config = TimeBucketConfig(
+    bucket_size=30,  
+    prediction_horizon=1,
+    min_txs_per_second=1,
+    use_max_multiple=True,
+    step_size=1,
+    max_seq_length=300
+    )
+    X, y, bucket_times = get_time_buckets(features, timestamps, prices, time_bucket_config)
+
+    # X currently contains all features
+    features_config = FeaturesConfig(
+        trade_size_ratio=True,
+        liquidity_ratio=True,
+        relative_time=True,
+    )
+
+    reduced_X = reduce_time_bucket_features(X, features_config)
 
 if __name__ == "__main__":
-    token_address = "WUb891xiehvvaDURF1r5ZBcbKULPQHcSnNtLfywpump"
-    feature_matrix = get_token_features(token_address, relative_time=False)
-
-    print(feature_matrix)
+    test_saving()

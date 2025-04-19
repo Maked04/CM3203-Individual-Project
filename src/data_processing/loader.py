@@ -102,7 +102,7 @@ def load_token_data(token_address: str, folder_name: str = "Jan_25_Tokens") -> p
         print(f"File path attempted: {file_path}")
         return None
 
-def load_token_price_data(token_address: str, folder_name: str = "Jan_25_Tokens", remove_anomalies=True) -> pd.DataFrame:
+def load_token_price_data(token_address: str, folder_name: str = "Jan_25_Tokens", remove_anomalies=True, use_datetime=True) -> pd.DataFrame:
     """
     Load and clean price data for a specific token from its CSV file.
     
@@ -125,7 +125,8 @@ def load_token_price_data(token_address: str, folder_name: str = "Jan_25_Tokens"
             df = remove_price_anomalies(df)
         
         # Convert block_time to datetime
-        df['block_time'] = pd.to_datetime(df['block_time'])
+        if use_datetime:
+            df['block_time'] = pd.to_datetime(df['block_time'])
         
         # Create processed dataframe with just time and price
         price_data = pd.DataFrame({

@@ -17,7 +17,17 @@
     "test_size": 0.2,
     "training_params": {
         "optimizer": "adam",
-        "loss": "weighted_mse_large_moves"
+        "loss": "weighted_mse_large_moves",
+        "epochs": 100,
+        "batch_size": 32,
+        "validation_split": null,
+        "early_stopping": {
+            "monitor": "val_loss",
+            "patience": 5,
+            "min_delta": -0.001,
+            "mode": "min",
+            "restore_best_weights": true
+        }
     },
     "model_architecture": {
         "layers": [

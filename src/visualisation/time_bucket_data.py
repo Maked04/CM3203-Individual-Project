@@ -5,7 +5,7 @@ from sklearn.preprocessing import StandardScaler
 
 
 # Local imports
-from src.data_processing.lstm_data_preprocessing_v3 import reduce_time_bucket_features
+from src.data_processing.lstm_data_preprocessing import reduce_time_bucket_features
 from src.data_processing.loader import load_time_bucket_data
 
 
