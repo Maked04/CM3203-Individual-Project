@@ -5,7 +5,6 @@ from src.data_processing.loader import load_token_price_data
 import plotly.graph_objects as go
 
 
-
 def plot_error_distribution(pred, real, bins=30, title='Error Distribution'):
     pred = np.array(pred)
     real = np.array(real)

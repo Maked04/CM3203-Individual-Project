@@ -321,6 +321,46 @@ def pre_process_train_test_data(time_bucket_config, tokens_file="cluster_2_token
         np.save(os.path.join(token_dir, "y"), y)
         np.save(os.path.join(token_dir, "bucket_times"), bucket_times)
 
+def pre_process_train_test_data_filtered(time_bucket_config, tokens_file="cluster_2_tokens.txt", ignore_start_secs=0):
+    # Create train test data folder if it doesnt exist
+    base_dir = os.path.join(get_data_dir(), "time_bucket_data")
+    os.makedirs(base_dir, exist_ok=True)
+
+    # Name of new directory is time_bucket_num where num increases per folder
+    folder_name = f"time_bucket_{len(os.listdir(base_dir)) + 1}"
+    time_bucket_dir = os.path.join(base_dir, folder_name)
+    os.makedirs(time_bucket_dir, exist_ok=True)
+
+    config_json = vars(time_bucket_config)
+
+    # Save time bucket config
+    with open(os.path.join(time_bucket_dir, "config.json"), "w") as f:
+        json.dump(config_json, f, indent=4)
+
+    # Read cluster 2 tokens
+    with load_data_file(tokens_file) as f:
+        token_addresses = f.read().splitlines()[:-1]
+
+    # Get features
+    for token_address in token_addresses:
+        features, timestamps, prices = get_token_features_and_metadata(token_address)
+
+        if ignore_start_secs > 0:
+            filtered_indexes = timestamps[timestamps > timestamps[0] + ignore_start_secs]
+            features, timestamps, prices = features[filtered_indexes], timestamps[filtered_indexes], prices[filtered_indexes]
+
+        # Get time buckets
+        X, y, bucket_times = get_time_buckets(features, timestamps, prices, time_bucket_config) 
+        if len(X) == 0 or len(y) == 0 or len(X) != len(y):  # Make sure we have data
+            continue
+        
+        token_dir = os.path.join(time_bucket_dir, token_address)
+        os.makedirs(token_dir, exist_ok=True)
+        # Save X, y, bucket_times per token
+        np.save(os.path.join(token_dir, "X"), X)
+        np.save(os.path.join(token_dir, "y"), y)
+        np.save(os.path.join(token_dir, "bucket_times"), bucket_times)
+
 
 def test_saving():
     time_bucket_config = TimeBucketConfig(
