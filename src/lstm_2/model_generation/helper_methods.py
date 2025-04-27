@@ -42,3 +42,24 @@ def generate_data(features_config, time_bucket_folder, test_size):
     X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_scaled, test_size=test_size, shuffle=False)
 
     return X_train, X_test, y_train, y_test, X_scaler, y_scaler
+
+def order_features_config(features_config_dict):
+    """
+    Orders a features_config dict according to the expected FeaturesConfig fields.
+    If a field is missing, it defaults to False.
+    """
+    feature_keys = [
+        "trade_size_ratio",
+        "liquidity_ratio",
+        "relative_time",
+        "absolute_time",
+        "price_change",
+        "wallet_trade_size_deviation",
+        "volume_prior",
+        "trade_count_prior",
+        "rough_pnl",
+        "average_roi",
+        "win_rate",
+        "average_hold_duration"
+    ]
+    return [features_config_dict.get(key, False) for key in feature_keys]

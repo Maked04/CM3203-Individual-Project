@@ -1,7 +1,7 @@
 {
     "features_config": {
-        "trade_size_ratio": false,
-        "liquidity_ratio": false,
+        "trade_size_ratio": true,
+        "liquidity_ratio": true,
         "relative_time": true,
         "absolute_time": false,
         "price_change": true,
@@ -74,18 +74,18 @@
                 "activation": "linear"
             }
         ],
-        "total_params": 138305
+        "total_params": 139329
     },
-    "timestamp": "20250426_114519",
+    "timestamp": "20250425_182444",
     "input_shape": [
         -1,
         300,
-        2
+        4
     ],
     "X_train_shape": [
         66836,
         300,
-        2
+        4
     ],
     "y_train_shape": [
         66836,

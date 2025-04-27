@@ -5,13 +5,13 @@
         "relative_time": true,
         "absolute_time": false,
         "price_change": true,
-        "wallet_trade_size_deviation": false,
+        "wallet_trade_size_deviation": true,
         "volume_prior": false,
         "trade_count_prior": false,
-        "rough_pnl": false,
-        "average_roi": false,
-        "win_rate": false,
-        "average_hold_duration": false
+        "rough_pnl": true,
+        "average_roi": true,
+        "win_rate": true,
+        "average_hold_duration": true
     },
     "time_bucket_folder": "time_bucket_1",
     "test_size": 0.2,
@@ -74,18 +74,18 @@
                 "activation": "linear"
             }
         ],
-        "total_params": 139329
+        "total_params": 141889
     },
-    "timestamp": "20250425_185231",
+    "timestamp": "20250417_184247",
     "input_shape": [
         -1,
         300,
-        4
+        9
     ],
     "X_train_shape": [
         66836,
         300,
-        4
+        9
     ],
     "y_train_shape": [
         66836,
