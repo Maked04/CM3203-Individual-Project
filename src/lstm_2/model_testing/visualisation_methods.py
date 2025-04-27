@@ -281,3 +281,14 @@ def plot_predictions_on_price_graph(token_address, bucket_pred_map, min_abs_pred
 
     fig.show()
 
+def plot_error_heatmap(pred, real, bins=30):
+    error = pred - real
+    plt.figure(figsize=(10, 6))
+    plt.hist2d(real, pred, bins=bins, cmap='coolwarm', cmin=1)
+    plt.colorbar(label='Count')
+    plt.plot([real.min(), real.max()], [real.min(), real.max()], 'r--', lw=2)
+    plt.xlabel('Actual')
+    plt.ylabel('Predicted')
+    plt.title('Predicted vs Actual (2D Histogram)')
+    plt.tight_layout()
+    plt.show()
