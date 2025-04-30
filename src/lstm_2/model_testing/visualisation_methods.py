@@ -39,7 +39,31 @@ def plot_error_distribution(pred, real, bins=30, title='Error Distribution'):
     plt.tight_layout()
     plt.show()
 
+def plot_distribution(values, bins=30, name="", color='lightgreen'):
+    values = np.array(values)
 
+    plt.figure(figsize=(10, 5))
+    plt.hist(values, bins=bins, alpha=0.7, color=color, edgecolor='black')
+    mean_pred = np.mean(values)
+    plt.axvline(x=mean_pred, color='black', linestyle='-', linewidth=1.5, label=f'Mean: {mean_pred:.4f}')
+    plt.xlabel(f'{name}Values')
+    plt.ylabel('Frequency')
+    plt.title(f'Distribution of {name} Values')
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+
+    # Add stats for predictions
+    pred_stats = f'Mean: {mean_pred:.4f}\n' \
+                 f'Std Dev: {np.std(values):.4f}\n' \
+                 f'Median: {np.median(values):.4f}\n' \
+                 f'Min: {np.min(values):.4f}\n' \
+                 f'Max: {np.max(values):.4f}'
+    plt.text(0.95, 0.95, pred_stats, transform=plt.gca().transAxes,
+             verticalalignment='top', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+    plt.tight_layout()
+    plt.show()
 
 def plot_value_distributions(pred, real, bins=30):
     pred = np.array(pred)
