@@ -1,55 +1,224 @@
 import numpy as np
 from sklearn.metrics import confusion_matrix
+import pandas as pd
+from sklearn.metrics import confusion_matrix
 
-def large_move_metrics(y_true, y_pred, threshold=0.5):
+
+def evaluate_large_move_model(y_true, y_pred, threshold=0.02,
+                               prediction_weight=0.4, freq_weight=0.3, error_weight=0.3, f1_weight=0.5):
     """
-    Computes metrics focused only on large price moves with error relative to prediction size.
-    
+    Evaluates how well predictions capture large market moves.
+
     Parameters:
-    - y_true: np.ndarray, true target values
-    - y_pred: np.ndarray, predicted target values
-    - threshold: float, defines a 'large move' (e.g., 0.02 = 2%)
-    
+    - y_true: array-like of true returns
+    - y_pred: array-like of predicted returns
+    - threshold: minimum % move considered 'large' (default 2%)
+    - *_weight: weights for combining submetrics into a final score
+
     Returns:
-    - metrics: dict with direction accuracy, relative MSE, relative MAE, count of large moves
+    - metrics: dict of all submetrics and the combined score
     """
+
     y_true = np.array(y_true).flatten()
     y_pred = np.array(y_pred).flatten()
 
-    # Select only large moves based on predicted values
-    large_moves_idx = np.where(np.abs(y_true) >= threshold)[0]
+    # Identify large moves
+    true_large_idx = np.where(np.abs(y_true) >= threshold)[0]
+    pred_large_idx = np.where(np.abs(y_pred) >= threshold)[0]
 
-    if len(large_moves_idx) == 0:
-        print("Warning: No large moves found above threshold.")
+    if len(true_large_idx) == 0:
+        print("⚠️ Warning: No large moves in ground truth.")
         return None
 
-    y_true_large = y_true[large_moves_idx]
-    y_pred_large = y_pred[large_moves_idx]
+    # Subset for large moves
+    y_true_large = y_true[pred_large_idx]
+    y_pred_large = y_pred[pred_large_idx]
 
-    # Directional accuracy (sign matching)
-    true_sign = np.sign(y_true_large)
-    pred_sign = np.sign(y_pred_large)
-    directional_accuracy = np.mean(true_sign == pred_sign)
+    # Directional accuracy
+    directional_acc = np.mean(np.sign(y_true_large) == np.sign(y_pred_large))
 
-    # Relative MSE and MAE only for large moves
-    relative_mse = np.mean(np.square(y_true_large - y_pred_large) / np.square(np.abs(y_pred_large)))
-    relative_mae = np.mean(np.abs(y_true_large - y_pred_large) / np.abs(y_pred_large))
+    # Relative MAE (normalized error on large true values)
+    abs_true = np.abs(y_true_large)
+    relative_mae = np.mean(np.abs(y_true_large - y_pred_large) / abs_true)
 
-    # New combined metric that incorporates directional accuracy, relative MSE, and large move count
-    relative_errors = (np.abs(y_true_large - y_pred_large) / np.abs(y_pred_large))
+    # Turn relative MAE into a "score" where higher = better
+    error_component = 1 / (1 + relative_mae)
 
-    combined_metric = directional_accuracy * relative_mae
+    # Frequency alignment
+    true_freq = len(true_large_idx) / len(y_true)
+    pred_freq = len(pred_large_idx) / len(y_pred)
+    freq_ratio = pred_freq / true_freq if true_freq > 0 else 0
+    freq_component = 1 - abs(1 - freq_ratio) if freq_ratio <= 2 else 1 / freq_ratio
 
-    metrics = {
-        'directional_accuracy': directional_accuracy,
-        'relative_mse': relative_mse,
+    # F1 score (did model predict large moves well as a classification task?)
+    y_true_bin = np.zeros_like(y_true)
+    y_true_bin[true_large_idx] = 1
+    y_pred_bin = np.zeros_like(y_pred)
+    y_pred_bin[pred_large_idx] = 1
+    tn, fp, fn, tp = confusion_matrix(y_true_bin, y_pred_bin, labels=[0, 1]).ravel()
+    precision = tp / (tp + fp) if (tp + fp) else 0
+    recall = tp / (tp + fn) if (tp + fn) else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0
+
+    # Final combined score
+    combined_score = (
+        prediction_weight * directional_acc +
+        freq_weight * freq_component +
+        error_weight * error_component
+    ) * (f1_weight * f1)
+
+    return {
+        'directional_accuracy': directional_acc,
         'relative_mae': relative_mae,
-        'combined_metric': combined_metric  # New combined metric
+        'error_score': error_component,
+        'frequency_ratio': freq_ratio,
+        'frequency_score': freq_component,
+        'f1_score': f1,
+        'combined_score': combined_score,
+        'true_large_count': len(true_large_idx),
+        'pred_large_count': len(pred_large_idx)
     }
 
-    return metrics
 
-def get_model_comparison(model_results, threshold=1):
+def test_trailing_strategy(token_predictions, tokens_tx_data, hold_time=60, buy_size=0.1, min_time_between_buys=60, verbose=True):
+    """
+    Allows multiple buys of the same token as long as they're spaced by at least `min_time_between_buys`.
+    """
+    dynamic_sell_thresholds = [0.5, 0.75, 0.875]
+    trailing_stop_targets = [0.5, 0.75]
+    buy_fee_pct = 0.01
+    sell_fee_pct = 0.01
+    slippage_pct = 0.005
+
+    total_profit = 0
+    num_trades = 0
+    num_wins = 0
+    num_losses = 0
+    profits = []
+
+    for token_address, bucket_pred_map in token_predictions.items():
+        price_df = tokens_tx_data[token_address]
+        price_df = price_df.groupby(price_df.index).mean().sort_index()
+        if verbose:
+            print(f"\nSimulating for token: {token_address}")
+        
+        last_buy_time = None  # Track last buy time per token
+
+        for pred_data in bucket_pred_map:
+            bucket_time = pred_data['bucket_time']
+            pred = pred_data['prediction']
+            if pred <= 1.0:
+                continue
+            start_time, end_time = bucket_time
+
+            if last_buy_time and (end_time - last_buy_time) < min_time_between_buys:
+                continue  # Skip if too soon after last buy
+
+            if end_time not in price_df.index:
+                closest_idx = price_df.index.get_indexer([end_time], method='nearest')[0]
+                closest_time = price_df.index[closest_idx]
+            else:
+                closest_time = end_time
+
+            raw_buy_price = price_df.loc[closest_time, 'price']
+            if pd.isna(raw_buy_price):
+                continue
+
+            buy_price = raw_buy_price * (1 + slippage_pct)
+            entry_value = buy_size * (1 - buy_fee_pct)
+            tokens_bought = entry_value / buy_price
+            remaining_tokens = tokens_bought
+            profit = -buy_size
+            peak_price = buy_price
+            last_buy_time = end_time  # Update last buy time
+
+            if verbose:
+                print(f"  Prediction: {pred}x | Buy Price: {buy_price:.6e} (with slippage/fees)")
+
+            future_prices = price_df.loc[closest_time:]
+            if len(future_prices) < 2:
+                continue
+
+            predicted_target_price = buy_price * pred
+            sell_targets_prices = [buy_price + (predicted_target_price - buy_price) * t for t in dynamic_sell_thresholds]
+            target_idx = 0
+            stop_idx = 0
+
+            for time, row in future_prices.iterrows():
+                raw_price = row['price']
+                peak_price = max(peak_price, raw_price)
+                sell_price = raw_price * (1 - slippage_pct) * (1 - sell_fee_pct)
+
+                if time - end_time > hold_time:
+                    profit += remaining_tokens * sell_price
+                    if verbose:
+                        print(f"    Hold time expired, sold all remaining | Price: {raw_price:.6e}")
+                    remaining_tokens = 0
+                    break
+
+                if raw_price >= predicted_target_price:
+                    profit += remaining_tokens * sell_price
+                    if verbose:
+                        print(f"    Sold all at predicted target | Price: {raw_price:.6e}")
+                    remaining_tokens = 0
+                    break
+
+                if target_idx < len(sell_targets_prices) and raw_price >= sell_targets_prices[target_idx]:
+                    sell_amount = remaining_tokens * 0.5
+                    profit += sell_amount * sell_price
+                    remaining_tokens -= sell_amount
+                    if verbose:
+                        print(f"    Sold 50% at {dynamic_sell_thresholds[target_idx]*100:.1f}% | Price: {raw_price:.6e}")
+                    target_idx += 1
+
+                drawdown = 1 - (raw_price / peak_price)
+                if stop_idx < len(trailing_stop_targets) and drawdown >= trailing_stop_targets[stop_idx]:
+                    sell_amount = remaining_tokens * 0.5
+                    profit += sell_amount * sell_price
+                    remaining_tokens -= sell_amount
+                    if verbose:
+                        print(f"    Trailing stop {trailing_stop_targets[stop_idx]*100:.1f}% hit | Price: {raw_price:.6e}")
+                    stop_idx += 1
+
+                if remaining_tokens <= 0:
+                    if verbose:
+                        print(f"    Fully exited. Profit: {profit:.4f} SOL")
+                    break
+
+            num_trades += 1
+            total_profit += profit
+            profits.append(profit)
+            if profit > 0:
+                num_wins += 1
+            else:
+                num_losses += 1
+
+    return {
+        "num_trades": num_trades,
+        "num_wins": num_wins,
+        "num_losses": num_losses,
+        "total_profit": total_profit
+    }
+
+
+
+def print_strategy_results(results):
+    # Summary
+    num_trades = results['num_trades']
+    num_wins = results['num_wins']
+    num_losses = results['num_losses']
+    total_profit = results['total_profit']
+
+    print("\n--- Strategy Summary ---")
+    print(f"Total Trades: {num_trades}")
+    print(f"Wins: {num_wins} | Losses: {num_losses}")
+    print(f"Win Rate: {(num_wins / num_trades * 100):.2f}%" if num_trades > 0 else "No trades made")
+    print(f"Total Profit: {total_profit:.4f} SOL")
+    if num_trades > 0:
+        print(f"Average Profit per Trade: {(total_profit / num_trades):.4f} SOL")
+
+
+def get_model_comparison(model_results, metric_func=evaluate_large_move_model, threshold=1):
     model_comparison = []
     
     for model_name, results in model_results.items():
@@ -57,116 +226,10 @@ def get_model_comparison(model_results, threshold=1):
         y_real = results["real"]
        
         # Compute the large move metrics
-        metrics = large_move_metrics_2(y_real, y_pred, threshold=threshold)
+        metrics = metric_func(y_real, y_pred, threshold=threshold)
        
         if metrics is not None:
             metrics["model_name"] = model_name
             model_comparison.append(metrics)
     
     return model_comparison
-
-
-def large_move_metrics_2(y_true, y_pred, threshold=0.5, prediction_weight=0.4, freq_weight=0.3, error_weight=0.3):
-    """
-    Computes comprehensive metrics focused on large price moves with error relative to prediction size.
-   
-    Parameters:
-    - y_true: np.ndarray, true target values
-    - y_pred: np.ndarray, predicted target values
-    - threshold: float, defines a 'large move' (e.g., 0.02 = 2%)
-    - prediction_weight: float, weight for directional accuracy in combined metric
-    - freq_weight: float, weight for prediction frequency in combined metric
-    - error_weight: float, weight for error component in combined metric
-   
-    Returns:
-    - metrics: dict with comprehensive evaluation metrics for large price moves
-    """
-    y_true = np.array(y_true).flatten()
-    y_pred = np.array(y_pred).flatten()
-    
-    # Identify large moves in true and predicted values
-    true_large_idx = np.where(np.abs(y_true) >= threshold)[0]
-    pred_large_idx = np.where(np.abs(y_pred) >= threshold)[0]
-    
-    # Handle case with no large moves
-    if len(true_large_idx) == 0:
-        print("Warning: No large moves found in true values above threshold.")
-        return None
-    
-    # Calculate metrics for all data points
-    all_directional_accuracy = np.mean(np.sign(y_true) == np.sign(y_pred))
-    
-    # Get large move samples from true values
-    y_true_large = y_true[true_large_idx]
-    y_pred_for_true_large = y_pred[true_large_idx]
-    
-    # Calculate directional accuracy for large moves
-    true_sign = np.sign(y_true_large)
-    pred_sign = np.sign(y_pred_for_true_large)
-    directional_accuracy = np.mean(true_sign == pred_sign)
-    
-    # Calculate magnitude accuracy for large moves
-    # Use clip to prevent division by zero or extremely small values
-    epsilon = 1e-10  # Small value to prevent division by zero
-    abs_true_large = np.abs(y_true_large)
-    abs_pred_for_true_large = np.abs(y_pred_for_true_large).clip(min=epsilon)
-    
-    # Relative error metrics
-    relative_mse = np.mean(np.square(y_true_large - y_pred_for_true_large) / np.square(abs_true_large))
-    relative_mae = np.mean(np.abs(y_true_large - y_pred_for_true_large) / abs_true_large)
-    
-    # Calculate magnitude ratio (how well the model captures the magnitude)
-    magnitude_ratio = np.mean(abs_pred_for_true_large / abs_true_large)
-    
-    # Binary classification metrics for large moves
-    # Create binary arrays for detected large moves
-    y_true_binary = np.zeros_like(y_true)
-    y_true_binary[true_large_idx] = 1
-    
-    y_pred_binary = np.zeros_like(y_pred)
-    y_pred_binary[pred_large_idx] = 1
-    
-    # Confusion matrix values
-    tn, fp, fn, tp = confusion_matrix(y_true_binary, y_pred_binary, labels=[0, 1]).ravel()
-    
-    # Calculate precision, recall and F1 for large move detection
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-    f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
-    
-    # Frequency metrics
-    true_frequency = len(true_large_idx) / len(y_true)
-    pred_frequency = len(pred_large_idx) / len(y_pred)
-    frequency_ratio = pred_frequency / true_frequency if true_frequency > 0 else 0
-    
-    # Calculate new combined metric
-    # Balance between directional accuracy, frequency matching, and error metrics
-    error_component = 1 / (1 + relative_mae)  # Transforms error to [0,1] range where higher is better
-    frequency_component = 1 - abs(1 - frequency_ratio) if frequency_ratio <= 2 else 1 / frequency_ratio
-    
-    combined_metric = (
-        prediction_weight * directional_accuracy +
-        freq_weight * frequency_component +
-        error_weight * error_component
-    ) * f1_score  # Scale by F1 to ensure both precision and recall matter
-    
-    # Information value - how much $ could be made per prediction on average
-    expected_value = np.mean(np.abs(y_true_large) * (2 * (true_sign == pred_sign).astype(float) - 1))
-    
-    metrics = {
-        'directional_accuracy': directional_accuracy,
-        'all_directional_accuracy': all_directional_accuracy,
-        'relative_mse': relative_mse,
-        'relative_mae': relative_mae,
-        'magnitude_ratio': magnitude_ratio,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1_score,
-        'true_large_count': len(true_large_idx),
-        'pred_large_count': len(pred_large_idx),
-        'frequency_ratio': frequency_ratio,
-        'expected_value': expected_value,
-        'combined_metric': combined_metric
-    }
-    
-    return metrics

@@ -2,10 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from src.data_processing.loader import load_token_price_data
-from src.lstm_2.model_testing.metrics_methods import large_move_metrics
 import plotly.graph_objects as go
-from matplotlib.gridspec import GridSpec
-import seaborn as sns
 
 
 def plot_error_distribution(pred, real, bins=30, title='Error Distribution'):
@@ -309,195 +306,46 @@ def plot_predictions_on_price_graph(token_address, bucket_pred_map, min_abs_pred
     fig.show()
 
 
-def plot_model_comparison(model_comparison, sort_by='combined_metric', include_metrics=None):
+def plot_model_comparison(results):
     """
-    Create visualizations to compare multiple models in two sections:
-    
-    Section 1:
-    - Model ranking by combined score
-    - Performance metrics heatmap
-    
-    Section 2:
-    - Detailed metrics bar chart
-    - Error metrics comparison
-   
+    Plots a comparison of model evaluation metrics.
+
     Parameters:
-    - model_comparison: list of dictionaries or DataFrame with model metrics
-    - sort_by: metric to sort models by (default: combined_metric)
-    - include_metrics: list of specific metrics to include (defaults to most important if None)
-   
-    Returns:
-    - None (displays plots)
+    - results: list of dicts containing evaluation metrics for each model.
+      Each dict should include 'model_name', 'combined_score', 'directional_accuracy',
+      'error_score', 'frequency_score', 'f1_score'.
     """
-    # Convert to DataFrame if list of dictionaries
-    if isinstance(model_comparison, list):
-        df_comparison = pd.DataFrame(model_comparison)
-    else:
-        df_comparison = model_comparison.copy()
-   
-    # Sort models by the specified metric (descending)
-    if sort_by in df_comparison.columns:
-        df_comparison = df_comparison.sort_values(by=sort_by, ascending=False)
-   
-    # Default important metrics if none specified
-    if include_metrics is None:
-        include_metrics = [
-            'combined_metric',     # Overall performance
-            'directional_accuracy', # Direction prediction quality
-            'f1_score',            # Balance of precision and recall
-            'frequency_ratio',     # Predicted vs actual frequency
-            'relative_mae'         # Magnitude accuracy (lower is better)
-        ]
-   
-    # Keep only metrics that exist in the dataframe
-    include_metrics = [m for m in include_metrics if m in df_comparison.columns]
-   
-    # SECTION 1: Create a figure with just two subplots side by side
-    fig, (ax_ranking, ax_heatmap) = plt.subplots(1, 2, figsize=(16, 8), gridspec_kw={'wspace': 0.3})
-   
-    # 1. Left: Combined score ranking bar chart
-    plot_combined_score_ranking(df_comparison, ax_ranking)
-   
-    # 2. Right: Performance metrics heatmap
-    plot_metrics_heatmap(df_comparison, include_metrics, ax_heatmap)
-   
-    plt.suptitle("Model Comparison for Large Price Movements", fontsize=16, y=0.98)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjusted to give more space for the title
+
+    model_names = [metrics["model_name"] for metrics in results]
+    combined_scores = [metrics['combined_score'] for metrics in results]
+    directional_scores = [metrics['directional_accuracy'] for metrics in results]
+    error_scores = [metrics['error_score'] for metrics in results]
+    freq_scores = [metrics['frequency_score'] for metrics in results]
+    f1_scores = [metrics['f1_score'] for metrics in results]
+
+    x = np.arange(len(model_names))
+    width = 0.15  # Adjusted width to fit all bars
+
+    # Plot Combined Score
+    plt.figure(figsize=(12, 6))
+    plt.bar(x, combined_scores, color='skyblue')
+    plt.xticks(x, model_names, rotation=45)
+    plt.ylabel("Combined Score")
+    plt.title("Model Ranking by Combined Score")
+    plt.grid(True, axis='y')
+    plt.tight_layout()
     plt.show()
 
-    # SECTION 2: Second figure with more detailed bar charts
-    fig, axes = plt.subplots(2, 1, figsize=(16, 12), gridspec_kw={'hspace': 0.4})
-   
-    # 5. Detailed metrics bar chart
-    plot_detailed_metrics_bars(df_comparison, include_metrics, axes[0])
-   
-    # 6. Error metrics comparison
-    plot_error_comparison(df_comparison, axes[1])
-   
-    plt.suptitle("Detailed Metrics Comparison", fontsize=16, y=0.98)
-    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjusted to give more space for the title
+    # Plot Sub-metrics including F1 Score
+    plt.figure(figsize=(12, 6))
+    plt.bar(x - width*1.5, directional_scores, width=width, label='Direction', color='lightgreen')
+    plt.bar(x - width*0.5, error_scores, width=width, label='Error', color='lightcoral')
+    plt.bar(x + width*0.5, freq_scores, width=width, label='Frequency', color='lightblue')
+    plt.bar(x + width*1.5, f1_scores, width=width, label='F1 Score', color='orange')
+    plt.xticks(x, model_names, rotation=45)
+    plt.ylabel("Sub-metric Scores (0-1)")
+    plt.title("Model Sub-metric Breakdown")
+    plt.legend()
+    plt.grid(True, axis='y')
+    plt.tight_layout()
     plt.show()
-
-def plot_combined_score_ranking(df, ax):
-    """Plot combined score ranking with improved layout"""
-    models = df['model_name'].values if 'model_name' in df.columns else df.index
-    scores = df['combined_metric'].values
-    
-    # Horizontal bar chart for better label visibility
-    bars = ax.barh(models, scores, color='skyblue')
-    ax.set_title('Model Ranking by Combined Score', fontsize=14, pad=20)
-    ax.set_xlabel('Combined Score', fontsize=12)
-    
-    # Add value annotations with improved positioning and visibility
-    for i, (bar, score) in enumerate(zip(bars, scores)):
-        ax.text(
-            bar.get_width() + 0.01,  # Position slightly to the right of the bar
-            bar.get_y() + bar.get_height()/2,  # Vertical center of the bar
-            f'{score:.3f}',
-            va='center',
-            fontweight='bold',
-            color='black'  # Ensure visibility with black text
-        )
-    
-    # Ensure y-axis labels are fully visible
-    plt.setp(ax.get_yticklabels(), fontsize=10)
-    ax.tick_params(axis='y', which='major', pad=8)  # Add padding to tick labels
-    
-    # Add grid for better readability
-    ax.grid(axis='x', linestyle='--', alpha=0.7)
-
-def plot_metrics_heatmap(df, metrics, ax):
-    """Plot metrics heatmap with improved layout"""
-    # Extract just the metrics we need and the model names
-    if 'model_name' in df.columns:
-        plot_df = df.set_index('model_name')[metrics]
-    else:
-        plot_df = df[metrics]
-    
-    # Create heatmap with improved spacing
-    im = ax.imshow(plot_df.values, cmap='viridis', aspect='auto')
-    
-    # Add colorbar with proper size
-    cbar = plt.colorbar(im, ax=ax, shrink=0.8)
-    cbar.set_label('Value', rotation=270, labelpad=15)
-    
-    # Configure axes with improved labels
-    ax.set_xticks(np.arange(len(metrics)))
-    ax.set_yticks(np.arange(len(plot_df)))
-    
-    ax.set_xticklabels(metrics, fontsize=10)
-    ax.set_yticklabels(plot_df.index, fontsize=10)
-    
-    # Rotate the tick labels for better visibility
-    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-    
-    # Add text annotations with contrasting colors for visibility
-    for i in range(len(plot_df)):
-        for j in range(len(metrics)):
-            value = plot_df.iloc[i, j]
-            # Choose text color based on background for better contrast
-            text_color = 'white' if value > plot_df.values.mean() else 'black'
-            ax.text(j, i, f"{value:.3f}", ha="center", va="center", color=text_color, fontsize=9)
-    
-    ax.set_title("Performance Metrics Heatmap", fontsize=14, pad=20)
-
-def plot_detailed_metrics_bars(df, metrics, ax):
-    """Plot detailed metrics bar chart with improved layout"""
-    # Get model names
-    models = df['model_name'].values if 'model_name' in df.columns else df.index
-    
-    # Set width of bars
-    width = 0.8 / len(metrics)
-    
-    # Plot bars for each metric with improved spacing
-    for i, metric in enumerate(metrics):
-        positions = np.arange(len(models)) + (i - len(metrics)/2 + 0.5) * width
-        ax.bar(positions, df[metric].values, width, label=metric)
-    
-    # Add labels and title with improved spacing
-    ax.set_ylabel('Score', fontsize=12)
-    ax.set_title('Detailed Performance Metrics Comparison', fontsize=14, pad=20)
-    
-    # Set x-ticks at the center of the groups
-    ax.set_xticks(np.arange(len(models)))
-    ax.set_xticklabels(models, fontsize=10, rotation=45, ha='right')
-    
-    # Add legend with better positioning - moved higher to avoid overlap
-    ax.legend(bbox_to_anchor=(0.5, -0.10), loc='upper center', ncol=len(metrics), fontsize=10)
-    
-    # Add grid for better readability
-    ax.grid(axis='y', linestyle='--', alpha=0.7)
-
-def plot_error_comparison(df, ax):
-    """Plot error metrics comparison with improved layout"""
-    # Get model names
-    models = df['model_name'].values if 'model_name' in df.columns else df.index
-    
-    # Error metrics to include
-    error_metrics = [col for col in df.columns if 'error' in col.lower() or 'mae' in col.lower() or 'mse' in col.lower()]
-    
-    if not error_metrics:
-        ax.text(0.5, 0.5, 'No error metrics found', ha='center', va='center', fontsize=14)
-        return
-    
-    # Set width of bars
-    width = 0.8 / len(error_metrics)
-    
-    # Plot bars for each error metric with improved spacing
-    for i, metric in enumerate(error_metrics):
-        positions = np.arange(len(models)) + (i - len(error_metrics)/2 + 0.5) * width
-        ax.bar(positions, df[metric].values, width, label=metric)
-    
-    # Add labels and title with improved spacing
-    ax.set_ylabel('Error Value', fontsize=12)
-    ax.set_title('Error Metrics Comparison (Lower is Better)', fontsize=14, pad=20)
-    
-    # Set x-ticks at the center of the groups
-    ax.set_xticks(np.arange(len(models)))
-    ax.set_xticklabels(models, fontsize=10, rotation=45, ha='right')
-    
-    # Add legend with better positioning - moved higher to avoid overlap
-    ax.legend(bbox_to_anchor=(0.5, -0.10), loc='upper center', ncol=min(len(error_metrics), 4), fontsize=10)
-    
-    # Add grid for better readability
-    ax.grid(axis='y', linestyle='--', alpha=0.7)
