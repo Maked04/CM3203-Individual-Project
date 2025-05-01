@@ -1,7 +1,8 @@
 import numpy as np
 from sklearn.metrics import confusion_matrix
 import pandas as pd
-from sklearn.metrics import confusion_matrix
+import random
+
 
 
 def evaluate_large_move_model(y_true, y_pred, threshold=0.02,
@@ -31,8 +32,8 @@ def evaluate_large_move_model(y_true, y_pred, threshold=0.02,
         return None
 
     # Subset for large moves
-    y_true_large = y_true[pred_large_idx]
-    y_pred_large = y_pred[pred_large_idx]
+    y_true_large = y_true[true_large_idx]
+    y_pred_large = y_pred[true_large_idx]
 
     # Directional accuracy
     directional_acc = np.mean(np.sign(y_true_large) == np.sign(y_pred_large))
@@ -82,10 +83,11 @@ def evaluate_large_move_model(y_true, y_pred, threshold=0.02,
 
 def test_trailing_strategy(token_predictions, tokens_tx_data, hold_time=60, buy_size=0.1, min_time_between_buys=60, verbose=True):
     """
-    Allows multiple buys of the same token as long as they're spaced by at least `min_time_between_buys`.
+    Simulates a trading strategy based on predicted future returns.
+    Assumes a prediction of 0.0 = no change, 1.0 = 100% gain, -0.5 = 50% loss, etc.
     """
-    dynamic_sell_thresholds = [0.5, 0.75, 0.875]
-    trailing_stop_targets = [0.5, 0.75]
+    dynamic_sell_thresholds = [0.75, 0.875]  # e.g., take partial profits as % to full target
+    trailing_stop_targets = [0.5, 0.75]      # trailing stop trigger drawdowns from peak
     buy_fee_pct = 0.01
     sell_fee_pct = 0.01
     slippage_pct = 0.005
@@ -99,20 +101,23 @@ def test_trailing_strategy(token_predictions, tokens_tx_data, hold_time=60, buy_
     for token_address, bucket_pred_map in token_predictions.items():
         price_df = tokens_tx_data[token_address]
         price_df = price_df.groupby(price_df.index).mean().sort_index()
+
         if verbose:
             print(f"\nSimulating for token: {token_address}")
         
-        last_buy_time = None  # Track last buy time per token
+        last_buy_time = None
 
         for pred_data in bucket_pred_map:
             bucket_time = pred_data['bucket_time']
             pred = pred_data['prediction']
-            if pred <= 1.0:
-                continue
+
+            if pred <= 0.0:
+                continue  # Only trade if prediction is for gain
+
             start_time, end_time = bucket_time
 
             if last_buy_time and (end_time - last_buy_time) < min_time_between_buys:
-                continue  # Skip if too soon after last buy
+                continue
 
             if end_time not in price_df.index:
                 closest_idx = price_df.index.get_indexer([end_time], method='nearest')[0]
@@ -130,17 +135,21 @@ def test_trailing_strategy(token_predictions, tokens_tx_data, hold_time=60, buy_
             remaining_tokens = tokens_bought
             profit = -buy_size
             peak_price = buy_price
-            last_buy_time = end_time  # Update last buy time
+            last_buy_time = end_time
 
             if verbose:
-                print(f"  Prediction: {pred}x | Buy Price: {buy_price:.6e} (with slippage/fees)")
+                print(f"  Prediction: {pred:+.2%} | Buy Price: {buy_price:.6e} (with slippage/fees)")
 
             future_prices = price_df.loc[closest_time:]
             if len(future_prices) < 2:
                 continue
 
-            predicted_target_price = buy_price * pred
-            sell_targets_prices = [buy_price + (predicted_target_price - buy_price) * t for t in dynamic_sell_thresholds]
+            predicted_target_price = buy_price * (1 + pred)
+            sell_targets_prices = [
+                buy_price + (predicted_target_price - buy_price) * t 
+                for t in dynamic_sell_thresholds
+            ]
+
             target_idx = 0
             stop_idx = 0
 
@@ -152,14 +161,14 @@ def test_trailing_strategy(token_predictions, tokens_tx_data, hold_time=60, buy_
                 if time - end_time > hold_time:
                     profit += remaining_tokens * sell_price
                     if verbose:
-                        print(f"    Hold time expired, sold all remaining | Price: {raw_price:.6e}")
+                        print(f"    Hold time expired, sold all | Price: {raw_price:.6e}")
                     remaining_tokens = 0
                     break
 
                 if raw_price >= predicted_target_price:
                     profit += remaining_tokens * sell_price
                     if verbose:
-                        print(f"    Sold all at predicted target | Price: {raw_price:.6e}")
+                        print(f"    Target hit, sold all | Price: {raw_price:.6e}")
                     remaining_tokens = 0
                     break
 
@@ -168,7 +177,7 @@ def test_trailing_strategy(token_predictions, tokens_tx_data, hold_time=60, buy_
                     profit += sell_amount * sell_price
                     remaining_tokens -= sell_amount
                     if verbose:
-                        print(f"    Sold 50% at {dynamic_sell_thresholds[target_idx]*100:.1f}% | Price: {raw_price:.6e}")
+                        print(f"    Partial sell at {dynamic_sell_thresholds[target_idx]*100:.1f}% | Price: {raw_price:.6e}")
                     target_idx += 1
 
                 drawdown = 1 - (raw_price / peak_price)
@@ -177,14 +186,16 @@ def test_trailing_strategy(token_predictions, tokens_tx_data, hold_time=60, buy_
                     profit += sell_amount * sell_price
                     remaining_tokens -= sell_amount
                     if verbose:
-                        print(f"    Trailing stop {trailing_stop_targets[stop_idx]*100:.1f}% hit | Price: {raw_price:.6e}")
+                        print(f"    Trailing stop hit ({trailing_stop_targets[stop_idx]*100:.1f}%) | Price: {raw_price:.6e}")
                     stop_idx += 1
 
                 if remaining_tokens <= 0:
                     if verbose:
-                        print(f"    Fully exited. Profit: {profit:.4f} SOL")
+                        print(f"    All tokens sold.")
                     break
 
+            if verbose:
+                print(f"Profit: {profit:.4f} SOL")
             num_trades += 1
             total_profit += profit
             profits.append(profit)
@@ -200,6 +211,106 @@ def test_trailing_strategy(token_predictions, tokens_tx_data, hold_time=60, buy_
         "total_profit": total_profit
     }
 
+
+def test_base_strategy(token_predictions, tokens_tx_data, buy_size=0.1, min_time_between_buys=30, verbose=True):
+    """
+    Simulates a trading strategy based on predicted future returns.
+    Assumes a prediction of 0.0 = no change, 1.0 = 100% gain, -0.5 = 50% loss, etc.
+    """
+    buy_fee_pct = 0.01
+    sell_fee_pct = 0.01
+    slippage_pct = 0.005
+
+    total_profit = 0
+    num_trades = 0
+    num_wins = 0
+    num_losses = 0
+    profits = []
+    for token_address, bucket_pred_map in token_predictions.items():
+        price_df = tokens_tx_data[token_address]
+        price_df = price_df.groupby(price_df.index).mean().sort_index()
+
+        if verbose:
+            print(f"\nSimulating for token: {token_address}")
+        
+        last_buy_time = None
+
+        for pred_data in bucket_pred_map:
+            bucket_time = pred_data['bucket_time']
+            pred = pred_data['prediction']
+
+            if pred <= 0.0:
+                continue  # Only trade if prediction is for gain
+
+            start_time, end_time = bucket_time
+
+            bucket_length_secs = end_time - start_time
+
+            if last_buy_time and (end_time - last_buy_time) < min_time_between_buys:
+                continue
+
+            if end_time not in price_df.index:
+                closest_idx = price_df.index.get_indexer([end_time], method='nearest')[0]
+                closest_time = price_df.index[closest_idx]
+            else:
+                closest_time = end_time
+
+            raw_buy_price = price_df.loc[closest_time, 'price']
+            if pd.isna(raw_buy_price):
+                continue
+
+            buy_price = raw_buy_price * (1 + slippage_pct)
+            entry_value = buy_size * (1 - buy_fee_pct)
+            tokens_bought = entry_value / buy_price
+            remaining_tokens = tokens_bought
+            profit = -buy_size
+            peak_price = buy_price
+            last_buy_time = end_time
+
+            if verbose:
+                print(f"  Prediction: {pred:+.2%} | Buy Price: {buy_price:.6e} (with slippage/fees)")
+
+            future_prices = price_df.loc[closest_time:]
+            if len(future_prices) < 2:
+                continue
+
+            predicted_target_price = buy_price * (1 + pred)
+
+            for time, row in future_prices.iterrows():
+                raw_price = row['price']
+                peak_price = max(peak_price, raw_price)
+                sell_price = raw_price * (1 - slippage_pct) * (1 - sell_fee_pct)
+
+                if time - end_time > bucket_length_secs:
+                    profit += remaining_tokens * sell_price
+                    if verbose:
+                        print(f"    Hold time expired, sold all | Price: {raw_price:.6e}")
+                    remaining_tokens = 0
+                    break
+
+                elif raw_price >= predicted_target_price:
+                    profit += remaining_tokens * sell_price
+                    if verbose:
+                        print(f"    Target hit, sold all | Price: {raw_price:.6e}")
+                    remaining_tokens = 0
+                    break
+
+            if verbose:
+                print(f"Profit: {profit:.4f} SOL")
+            num_trades += 1
+            total_profit += profit
+            profits.append(profit)
+            if profit > 0:
+                num_wins += 1
+            else:
+                num_losses += 1
+
+    return {
+        "num_trades": num_trades,
+        "num_wins": num_wins,
+        "num_losses": num_losses,
+        "total_profit": total_profit
+    }
 
 
 def print_strategy_results(results):
@@ -233,3 +344,14 @@ def get_model_comparison(model_results, metric_func=evaluate_large_move_model, t
             model_comparison.append(metrics)
     
     return model_comparison
+
+def pair_predictions_with_input_sequence(X_test, y_pred, y_test, min_pred_size=1):
+    pred_large_idx = np.where(np.abs(y_pred) >= min_pred_size)[0]
+
+    y_pred_large = y_pred[pred_large_idx]
+    y_real_equivalent = y_test[pred_large_idx]
+    X_test_equivalent = X_test[pred_large_idx]
+
+
+    return X_test_equivalent, y_pred_large, y_real_equivalent
+

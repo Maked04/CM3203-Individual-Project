@@ -171,6 +171,61 @@ def plot_directional_accuracy(pred, real, bins=None):
 
 
 def plot_magnitude_accuracy(pred, real, bins=None, use_percentage_error=False):
+    print("here")
+    if bins is None:
+        bins = [-np.inf, -1, -0.5, -0.1, 0.1, 0.5, 1, np.inf]  # Exclude zero to avoid division issues
+    pred = np.array(pred).flatten()
+    real = np.array(real).flatten()
+   
+    # Filter out values where real is exactly 0 if using percentage error
+    if use_percentage_error:
+        nonzero_mask = real != 0  # Change to filter based on real values
+        pred = pred[nonzero_mask]
+        real = real[nonzero_mask]
+    
+    bin_labels = [f"{bins[i]} to {bins[i+1]}" for i in range(len(bins)-1)]
+    binned_data = pd.cut(pred, bins, labels=bin_labels)
+    bin_errors = {}
+    bin_counts = {}
+    for bin_label in bin_labels:
+        indices = (binned_data == bin_label)
+        bin_counts[bin_label] = indices.sum()
+        if indices.sum() > 0:
+            if use_percentage_error:
+                # Correct formula: |real - pred| / |real| * 100
+                errors = np.abs((real[indices] - pred[indices]) / real[indices]) * 100  # Multiply by 100 for percentage
+            else:
+                errors = np.abs(real[indices] - pred[indices])
+            avg_error = np.mean(errors)
+            bin_errors[bin_label] = avg_error
+        else:
+            bin_errors[bin_label] = None
+    
+    # Remove empty bins
+    bin_errors = {k: v for k, v in bin_errors.items() if v is not None}
+    bin_counts = {k: v for k, v in bin_counts.items() if v > 0}
+    labels = list(bin_errors.keys())
+    avg_errors = list(bin_errors.values())
+    counts = [bin_counts[label] for label in labels]
+    
+    # Plotting
+    plt.figure(figsize=(10, 6))
+    bars = plt.bar(labels, avg_errors, color='salmon')
+    plt.xlabel("Predicted Value Bins")
+    ylabel = "Average Percentage Error (%)" if use_percentage_error else "Average Absolute Error"
+    plt.ylabel(ylabel)
+    plt.title(f"{ylabel} per Bin (with Prediction Counts)")
+    plt.xticks(rotation=45, ha='right')
+    for bar, count in zip(bars, counts):
+        height = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width()/2., height,
+                 f'n={count}', ha='center', va='bottom', fontsize=9)
+    plt.tight_layout()
+    plt.show()
+    
+    return bin_errors, bin_counts
+
+def plot_magnitude_accuracy_old(pred, real, bins=None, use_percentage_error=False):
     if bins is None:
         bins = [-np.inf, -1, -0.5, -0.1, 0.1, 0.5, 1, np.inf]  # Exclude zero to avoid division issues
 
@@ -349,3 +404,86 @@ def plot_model_comparison(results):
     plt.grid(True, axis='y')
     plt.tight_layout()
     plt.show()
+
+
+
+import matplotlib.pyplot as plt
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+import math
+
+import matplotlib.pyplot as plt
+import numpy as np
+import math
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+
+class DistributionNavigator:
+    def __init__(self, X_test_equivalents, y_predictions, y_real_equivalents, feature_names, bins=30, figsize_per_plot=(5, 3), log_scale=False):
+        self.X_test_equivalents = X_test_equivalents
+        self.y_predictions = y_predictions
+        self.y_real_equivalents = y_real_equivalents
+        self.feature_names = feature_names
+        self.bins = bins
+        self.figsize_per_plot = figsize_per_plot
+        self.index = 0
+        self.log_scale = log_scale
+
+        # Widgets
+        self.index_display = widgets.IntText(value=self.index, description='Index:', disabled=True)
+        self.next_button = widgets.Button(description='Next')
+        self.back_button = widgets.Button(description='Back')
+        self.output = widgets.Output()
+
+        # Bind events
+        self.next_button.on_click(self._on_next)
+        self.back_button.on_click(self._on_back)
+
+    def _plot(self):
+        with self.output:
+            clear_output(wait=True)
+            data_index = self.index % self.X_test_equivalents.shape[0]
+            X_test_equivalents = self.X_test_equivalents[data_index]
+            y_pred = self.y_predictions[data_index]
+            y_real_equivalent = self.y_real_equivalents[data_index]
+            # Use shape to get how many features in each step in x test
+            num_features = X_test_equivalents.shape[1]
+
+            cols = math.ceil(math.sqrt(num_features))
+            rows = math.ceil(num_features / cols)
+            
+            figsize = (cols * self.figsize_per_plot[0], rows * self.figsize_per_plot[1])
+            fig, axs = plt.subplots(rows, cols, figsize=figsize)
+            plt.suptitle(f"Feature distributions for pred: {y_pred}, real: {y_real_equivalent}", fontsize=16)
+            axs = np.array(axs).reshape(-1)  # Flatten grid of axes to 1D
+
+            for i in range(num_features):
+                feature_values = X_test_equivalents[:, i]
+                # Plot the histogram
+                axs[i].hist(feature_values, bins=self.bins, color='skyblue', edgecolor='black')
+                feature_name = self.feature_names[i]
+                axs[i].set_title(f'Distribution of {feature_name}')
+                
+                # Apply log scale if specified
+                if self.log_scale:
+                    axs[i].set_yscale('log')  # Apply log scale on y-axis
+                
+            plt.show()
+
+    def _on_next(self, _):
+        self.index += 1
+        self.index_display.value = self.index % self.X_test_equivalents.shape[0]
+        self._plot()
+
+    def _on_back(self, _):
+        self.index -= 1
+        self.index_display.value = self.index % self.X_test_equivalents.shape[0]
+        self._plot()
+
+    def show(self):
+        """
+        Displays the interactive plot navigator.
+        """
+        self._plot()
+        controls = widgets.HBox([self.back_button, self.next_button, self.index_display])
+        display(controls, self.output)

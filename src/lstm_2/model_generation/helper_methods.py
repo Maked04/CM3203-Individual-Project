@@ -4,7 +4,7 @@ import datetime
 import json
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler  # type: ignore
-from src.data_processing.lstm_data_preprocessing import reduce_time_bucket_features
+from src.data_processing.lstm_data_preprocessing import reduce_time_bucket_features, FeaturesConfig
 from src.data_processing.loader import load_time_bucket_data
 
 
@@ -65,6 +65,14 @@ def order_features_config(features_config_dict):
         "average_hold_duration"
     ]
     return [features_config_dict.get(key, False) for key in feature_keys]
+
+
+def get_active_features(features_config: FeaturesConfig):
+    # Get the attribute names of the instance
+    active_features = [
+        attr for attr, value in vars(features_config).items() if value
+    ]
+    return active_features
 
 
 # Save model and config (updated to include hyperparameters)
@@ -160,3 +168,56 @@ def save_model_with_config(model, tuner, features_config, time_bucket_folder, te
     print(f"Configuration saved to {config_path}")
     print(f"\nAll model artifacts saved to {model_dir}")
 
+def get_test_tokens_with_large_pred(token_datasets, test_size, y_pred_actual, min_abs_pred_size=1.5):
+    total_buckets = sum(len(data[1]) for data in token_datasets)
+    test_start_idx = int((1 - test_size) * total_buckets)
+
+    fully_test_tokens = {}
+    current_idx = 0
+    y_pred_test_index = 0  # Index within y_pred_actual
+
+    for X, y, token_address, bucket_times in token_datasets:
+        token_len = len(y)
+        token_start_idx = current_idx
+        current_idx += token_len
+
+        # Only process tokens fully in the test set
+        if token_start_idx >= test_start_idx:
+            bucket_pred_map = []
+
+            for i in range(token_len):
+                if y_pred_test_index >= len(y_pred_actual):
+                    break  # Prevent overflow if mismatch in lengths
+                pred = y_pred_actual[y_pred_test_index].item()
+                if abs(pred) >= min_abs_pred_size:
+                    bucket_pred_map.append({
+                        'bucket_time': tuple(bucket_times[i]),
+                        'prediction': pred
+                    })
+                y_pred_test_index += 1
+
+            if bucket_pred_map:
+                fully_test_tokens[token_address] = bucket_pred_map
+
+    return fully_test_tokens
+
+
+def get_token_datasets(time_bucket_folder):
+    token_time_buckets, time_bucket_config = load_time_bucket_data(time_bucket_folder)
+
+    token_datasets = []
+    for token_address, data in token_time_buckets.items():
+        X = data["X"]
+        y = data["y"]
+        bucket_times = data["bucket_times"]
+
+        token_datasets.append((X, y, token_address, bucket_times))
+
+    return token_datasets
+
+def remove_zero_rows(arr):
+    # Check where all elements in each row are zero along the last dimension (num_features)
+    non_zero_rows = np.all(arr == 0, axis=(1, 2))
+    
+    # Use boolean indexing to remove the rows where all features are zero
+    return arr[~non_zero_rows]
