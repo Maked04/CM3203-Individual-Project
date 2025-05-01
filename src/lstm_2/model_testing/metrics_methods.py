@@ -233,3 +233,85 @@ def get_model_comparison(model_results, metric_func=evaluate_large_move_model, t
             model_comparison.append(metrics)
     
     return model_comparison
+
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
+
+def plot_large_move_evaluation(y_true, y_pred, threshold=0.02):
+    """
+    Evaluates how well predictions capture large market moves and visualizes the results.
+    
+    Parameters:
+    - y_true: array-like of true returns
+    - y_pred: array-like of predicted returns
+    - threshold: minimum % move considered 'large' (default 2%)
+    
+    Returns:
+    - None (displays plots)
+    """
+    y_true = np.array(y_true).flatten()
+    y_pred = np.array(y_pred).flatten()
+    
+    # Identify large moves
+    true_large_idx = np.where(np.abs(y_true) >= threshold)[0]
+    pred_large_idx = np.where(np.abs(y_pred) >= threshold)[0]
+    
+    if len(true_large_idx) == 0:
+        print("⚠️ Warning: No large moves in ground truth.")
+        return None
+    
+    # Binary classification for large moves
+    y_true_bin = np.zeros_like(y_true)
+    y_true_bin[true_large_idx] = 1
+    y_pred_bin = np.zeros_like(y_pred)
+    y_pred_bin[pred_large_idx] = 1
+    
+    # Calculate confusion matrix
+    cm = confusion_matrix(y_true_bin, y_pred_bin, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+    
+    # Calculate metrics
+    precision = tp / (tp + fp) if (tp + fp) else 0
+    recall = tp / (tp + fn) if (tp + fn) else 0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0
+    
+    # Create figure with 2 subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Plot 1: Confusion Matrix
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                xticklabels=['Normal', 'Large Move'],
+                yticklabels=['Normal', 'Large Move'],
+                ax=ax1)
+    ax1.set_title('Confusion Matrix for Large Moves')
+    ax1.set_xlabel('Predicted')
+    ax1.set_ylabel('Actual')
+    
+    # Plot 2: Precision, Recall, F1 Score
+    metrics = [precision, recall, f1]
+    ax2.bar(['Precision', 'Recall', 'F1 Score'], metrics, color=['#1f77b4', '#ff7f0e', '#2ca02c'])
+    ax2.set_ylim([0, 1])
+    ax2.set_title('Precision, Recall, and F1 Score')
+    
+    # Add values on top of bars
+    for i, v in enumerate(metrics):
+        ax2.text(i, v + 0.02, f'{v:.3f}', ha='center')
+    
+    # Add a text box with summary statistics
+    textbox = (
+        f"True Large Moves: {len(true_large_idx)}\n"
+        f"Predicted Large Moves: {len(pred_large_idx)}\n"
+        f"Precision: {precision:.3f}\n"
+        f"Recall: {recall:.3f}\n"
+        f"F1 Score: {f1:.3f}"
+    )
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+    ax2.text(1.05, 0.5, textbox, transform=ax2.transAxes, fontsize=10,
+             verticalalignment='center', bbox=props)
+    
+    plt.tight_layout()
+    plt.show()
+    
+    return fig
